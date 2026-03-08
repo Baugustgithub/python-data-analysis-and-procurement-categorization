@@ -245,23 +245,28 @@ class App(tk.Tk):
 
             out_dir = self.out_var.get() or script_dir
 
-            # ── Read all files ──────────────────────────────────────────────
-            dfs = []
+            # ── Read all files (incremental concat to limit peak memory) ──
+            combined = None
+            file_count = 0
             for f in self.files:
                 self._log(f"Reading: {os.path.basename(f)}")
                 try:
                     df = _read_file_robust(f)
                     self._log(f"  → {len(df):,} rows", "ok")
-                    dfs.append(df)
+                    if combined is None:
+                        combined = df
+                    else:
+                        combined = pd.concat([combined, df], ignore_index=True)
+                    file_count += 1
+                    del df
                 except Exception as e:
                     self._log(f"  ✗ Failed to read {os.path.basename(f)}: {e}", "err")
 
-            if not dfs:
+            if combined is None:
                 self._log("No data could be read. Aborting.", "err")
                 return
 
-            combined = pd.concat(dfs, ignore_index=True)
-            self._log(f"Combined: {len(combined):,} total rows across {len(dfs)} file(s)", "ok")
+            self._log(f"Combined: {len(combined):,} total rows across {file_count} file(s)", "ok")
 
             # ── Categorize ──────────────────────────────────────────────────
             self._log("Categorizing…")

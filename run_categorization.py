@@ -439,17 +439,23 @@ def main():
     csv_output = sys.argv[2] if len(sys.argv) > 2 else os.path.join(script_dir, "categorized_output.csv")
     xlsx_output = os.path.join(script_dir, "Procurement_Analysis.xlsx")
 
-    # ── Read file(s) ────────────────────────────────────────────────────────
-    dfs = []
+    # ── Read file(s) (incremental concat to limit peak memory) ──────────────
+    df = None
     for f in input_files:
         log.info("Reading: %s", os.path.basename(f))
         try:
-            dfs.append(_read_file_robust(f))
+            chunk = _read_file_robust(f)
+            if df is None:
+                df = chunk
+            else:
+                df = pd.concat([df, chunk], ignore_index=True)
+            del chunk
         except Exception as e:
             log.error("Failed to read %s: %s", os.path.basename(f), e)
             sys.exit(1)
-
-    df = pd.concat(dfs, ignore_index=True)
+    if df is None:
+        log.error("No data could be read from input files.")
+        sys.exit(1)
     log.info("Total rows: %s", f"{len(df):,}")
 
     if df.empty:
