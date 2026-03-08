@@ -1,9 +1,39 @@
 """
-Procurement Categorization Engine — 5-Pass Rule Stack
+Procurement Categorization Engine — 6-Pass Rule Stack
 Built from VCU's actual commodity_codes.xlsx and account_codes.csv
+
+Pass 0 — Vendor Hard Overrides  (confidence 0.95)
+Pass 1 — Commodity Code Crosswalk (confidence 0.95)
+Pass 2 — Vendor Always-List      (confidence 0.90)
+Pass 3 — Category Level 1 Metadata (confidence 0.70)
+Pass 4 — Inference Rules (multi-signal scoring) (confidence 0.60–0.85)
+Pass 5 — Keyword / Regex Scan    (confidence 0.50)
+Pass 6 — Account-Family Fallback (confidence 0.20)
 """
+import logging
 import re
 import pandas as pd
+
+log = logging.getLogger(__name__)
+
+# ── Column name aliases — flexible input handling ───────────────────────────
+# Maps canonical name → list of common alternatives (case-insensitive match)
+COLUMN_ALIASES = {
+    "Vendor Name":          ["Vendor Name", "Vendor", "Supplier", "Primary Second Party",
+                             "Supplier Name", "Payee", "Payee Name"],
+    "Commodity Code":       ["Commodity Code", "Commodity", "NIGP Code", "NIGP",
+                             "Commodity/NIGP Code", "Category Code"],
+    "Account":              ["Account", "Account Code", "GL Account", "Account Number",
+                             "GL Code", "Account No"],
+    "Category Level 1":     ["Category Level 1", "Category", "Category1", "NIGP Category",
+                             "Commodity Category"],
+    "Product Description":  ["Product Description", "Description", "Item Description",
+                             "Line Description", "PO Description", "Short Description"],
+    "Manufacturer":         ["Manufacturer", "Mfr", "Mfg", "Brand", "Manufacturer Name"],
+    "Extended Price":       ["Extended Price", "Amount", "Total Amount", "Spend",
+                             "Total Price", "Line Amount", "PO Amount", "Invoice Amount",
+                             "Extended Amount", "Net Amount"],
+}
 
 BUCKET_COLORS = {
     "Research & Laboratory":                "#3B82F6",
@@ -759,15 +789,96 @@ _COMPILED = [
     for m, l2, l3, p, hit in KEYWORD_PATTERNS
 ]
 
+# ══════════════════════════════════════════════════════════════
+# PASS 4b — INFERENCE RULES (multi-signal scoring)
+# Integrates include/exclude keywords, vendor hints, and
+# account prefixes for higher-confidence classification.
+# ══════════════════════════════════════════════════════════════
+INFERENCE_RULES = [
+    # (rule_id, priority, bucket, l2, l3, include_kw, exclude_kw, vendor_kw, account_prefixes, min_conf, reason)
+    ("OUTSCOPE_PAY", 100, "Inter-Entity / Transfers", "Out of Scope", "Payments/Fees/Transfers",
+     ["stipend", "scholarship", "refund", "reimbursement", "grant", "award payment", "tax",
+      "penalty", "fine", "interest", "late fee", "pass-through"],
+     [], [], [], 0.60, "Out-of-scope payments/fees"),
+    ("OUTSCOPE_INT", 99, "Inter-Entity / Transfers", "Out of Scope", "Internal/Recharge",
+     ["recharge", "internal billing", "interdepartmental", "service center", "allocat", "chargeback"],
+     [], [], [], 0.60, "Internal/recharge"),
+    ("NEEDSREVIEW_ADMIN", 98, "Uncategorized", "Needs Review", "Admin/Vague",
+     ["declining balance", "blanket po", "total amount", "per quote", "see attached", "tbd", "miscellaneous"],
+     [], [], [], 0.50, "Vague/admin description"),
+    ("FREIGHT_CORE", 97, "Travel, Events & Hospitality", "Transportation", "Freight & Delivery",
+     ["freight", "shipping", "delivery", "handling", "courier"],
+     [], ["ups", "fedex", "dhl"], [], 0.65, "Freight keywords / carrier"),
+    ("UTIL_CORE", 96, "Utilities & Occupancy", "Electric / Gas", "Utilities",
+     ["electric", "power", "water", "sewer", "gas", "utility"],
+     [], ["dominion", "energy", "water authority"], [], 0.70, "Utilities"),
+    ("JAN_SUP", 95, "Facilities / MRO", "Janitorial", "Cleaning Supplies",
+     ["disinfectant", "bleach", "sanitizer", "soap", "paper towel", "toilet paper",
+      "trash bag", "liner", "mop", "cleaner", "degreaser"],
+     [], ["unis", "waxie"], ["62"], 0.70, "Janitorial supplies"),
+    ("FURN_CORE", 95, "Admin & Office", "Furniture & Fixtures", "Furniture",
+     ["desk", "chair", "workstation", "panel system", "credenza", "bookcase",
+      "conference table", "seating"],
+     ["repair", "service"], ["steelcase", "haworth", "herman miller"], ["70", "71", "72"], 0.75, "Furniture keywords"),
+    ("PSEC_TECH", 95, "IT", "IT Hardware & Peripherals", "Physical Security Technology",
+     ["camera", "cctv", "nvr", "dvr", "badge reader", "card reader", "access control",
+      "door controller", "mag lock", "intercom", "turnstile", "security panel"],
+     ["guard", "patrol", "security officer", "watchman", "post coverage"],
+     ["genetec", "avigilon", "axis", "lenel", "verkada", "brivo"], ["70", "71", "72"], 0.75, "Security hardware"),
+    ("SEC_SERV", 92, "Services", "Facilities Services", "Security Services",
+     ["security guard", "guard services", "security officer", "patrol", "post coverage",
+      "watchman", "event security"],
+     ["camera", "cctv", "nvr", "dvr", "badge reader", "access control", "panel",
+      "hardware", "install", "installation"],
+     ["allied universal", "securitas", "g4s"], ["60", "61", "62"], 0.75, "Guard services"),
+    ("IT_STAFF", 94, "Services", "Staffing & Temp Labor", "IT Professional Staffing",
+     ["developer", "software engineer", "data engineer", "cloud engineer", "devops",
+      "sysadmin", "help desk", "service desk", "network engineer", "security engineer",
+      "it contractor", "it staffing"],
+     ["license", "subscription", "saas"],
+     ["teksystems", "insight global", "apex systems", "randstad", "robert half"],
+     ["60", "61", "62"], 0.75, "IT staffing keywords"),
+    ("TRAINING", 90, "Services", "Training & Education", "Training / Conferences",
+     ["registration", "conference", "training", "workshop", "seminar", "webinar"],
+     ["license", "subscription", "saas"], [], ["60", "61", "62"], 0.70, "Training fees"),
+    ("PUBS", 85, "Admin & Office", "Published / Books", "Publications / Subscriptions",
+     ["journal", "publication", "subscription", "ebsco", "database access"],
+     ["saas", "software", "license"], ["ebsco"], ["62", "63"], 0.65, "Publications"),
+]
+
+# Sort by priority descending so highest-priority rules are checked first
+INFERENCE_RULES.sort(key=lambda r: r[1], reverse=True)
+
+
+def _resolve_column(df_columns, canonical_name):
+    """Find the best matching column name from the DataFrame, or None."""
+    aliases = COLUMN_ALIASES.get(canonical_name, [canonical_name])
+    col_lower = {c.lower().strip(): c for c in df_columns}
+    for alias in aliases:
+        if alias in df_columns:
+            return alias
+        match = col_lower.get(alias.lower().strip())
+        if match:
+            return match
+    return None
+
+
+def _safe_str(row, key, default=""):
+    """Safely extract a string value from a row dict."""
+    val = row.get(key, default)
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return default
+    return str(val).strip()
+
 
 def categorize_row(row: dict) -> dict:
-    vendor    = str(row.get("Vendor Name","")).strip().lower()
-    commodity = str(row.get("Commodity Code","")).strip().lstrip("0") # normalize leading zeros
-    commodity_raw = str(row.get("Commodity Code","")).strip()
-    account   = str(row.get("Account","")).strip()
-    cat1      = str(row.get("Category Level 1","")).strip().lower()
-    desc      = str(row.get("Product Description","")).strip().lower()
-    mfr       = str(row.get("Manufacturer","")).strip().lower()
+    vendor    = _safe_str(row, "Vendor Name").lower()
+    commodity = _safe_str(row, "Commodity Code").lstrip("0")  # normalize leading zeros
+    commodity_raw = _safe_str(row, "Commodity Code")
+    account   = _safe_str(row, "Account")
+    cat1      = _safe_str(row, "Category Level 1").lower()
+    desc      = _safe_str(row, "Product Description").lower()
+    mfr       = _safe_str(row, "Manufacturer").lower()
     scan_text = f"{desc} {mfr} {cat1}"
 
     # Pass 0: vendor hard overrides (beats commodity code)
@@ -777,7 +888,7 @@ def categorize_row(row: dict) -> dict:
 
     # Pass 1: try both raw and leading-zero-stripped commodity
     for c in [commodity_raw, commodity]:
-        if c in COMMODITY_CROSSWALK:
+        if c and c != "nan" and c in COMMODITY_CROSSWALK:
             m, l2, l3 = COMMODITY_CROSSWALK[c]
             return _r(m, l2, l3, 1, f"comm:{c}", 0.95)
 
@@ -791,35 +902,71 @@ def categorize_row(row: dict) -> dict:
         if kw in cat1:
             return _r(m, l2, l3, 3, f"cat1:{kw[:20]}", 0.7)
 
-    # Pass 4: keyword / regex
+    # Pass 4: inference rules (multi-signal scoring)
+    infer_result = _apply_inference_rules(scan_text, vendor, account)
+    if infer_result:
+        return infer_result
+
+    # Pass 5: keyword / regex
     for m, l2, l3, pattern, hit in _COMPILED:
         if pattern.search(scan_text):
-            return _r(m, l2, l3, 4, hit, 0.5)
+            return _r(m, l2, l3, 5, hit, 0.50)
 
-    # Pass 5: account-family fallback
+    # Pass 6: account-family fallback
     for acct in account.replace("|", " ").split():
         pfx = acct[:3]
-        if pfx in ACCOUNT_FAMILY_MAP:
+        if pfx.isdigit() and pfx in ACCOUNT_FAMILY_MAP:
             m, l2, l3 = ACCOUNT_FAMILY_MAP[pfx]
-            return _r(m, l2, l3, 5, f"acct:{pfx}xxx", 0.2)
+            return _r(m, l2, l3, 6, f"acct:{pfx}xxx", 0.20)
 
-    return _r("Uncategorized", "Unknown", "Unknown", 5, "fallback:none", 0.1)
+    return _r("Uncategorized", "Unknown", "Unknown", 6, "fallback:none", 0.10)
+
+
+def _apply_inference_rules(scan_text, vendor, account):
+    """Pass 4: Multi-signal inference rules — matches when include keywords
+    are present AND exclude keywords are absent, with optional vendor/account boosting."""
+    for rule_id, _pri, bucket, l2, l3, inc_kw, exc_kw, vendor_kw, acct_pfx, base_conf, _reason in INFERENCE_RULES:
+        # Must match at least one include keyword
+        if not any(kw in scan_text for kw in inc_kw):
+            continue
+        # Must NOT match any exclude keyword
+        if any(kw in scan_text for kw in exc_kw):
+            continue
+        # Confidence boosting from vendor and account signals
+        conf = base_conf
+        if vendor_kw and any(vk in vendor for vk in vendor_kw):
+            conf = min(conf + 0.10, 0.95)
+        if acct_pfx:
+            for acct in account.replace("|", " ").split():
+                if any(acct.startswith(p) for p in acct_pfx):
+                    conf = min(conf + 0.05, 0.95)
+                    break
+        return _r(bucket, l2, l3, 4, f"infer:{rule_id}", conf)
+    return None
 
 
 def _r(master, l2, l3, pass_num, hit, conf):
     return {"master_bucket": master, "sub_bucket_l2": l2, "sub_bucket_l3": l3,
-            "rule_pass": pass_num, "rule_hit": hit, "confidence_score": conf}
+            "rule_pass": pass_num, "rule_hit": hit, "confidence_score": round(conf, 2)}
 
 # Services rows that need human review: landed here via account fallback only,
 # OR matched only the generic consulting / other-services catch-all keywords.
-_SERVICES_REVIEW_HITS = {"acct:600xxx", "acct:634xxx", "kw:svc_other", "kw:svc_consulting", "kw:svc_facilities"}
+_SERVICES_REVIEW_HITS = {
+    "acct:600xxx", "acct:634xxx",
+    "kw:svc_other", "kw:svc_consulting", "kw:svc_facilities",
+    "infer:NEEDSREVIEW_ADMIN",
+}
 
 def _needs_services_review(row_result: dict) -> bool:
     """True if this Services row should be queued for manual sub-classification."""
-    if row_result.get("master_bucket") != "Services":
+    bucket = row_result.get("master_bucket", "")
+    hit = row_result.get("rule_hit", "")
+    # Flag uncategorized rows too
+    if bucket == "Uncategorized":
+        return True
+    if bucket != "Services":
         return False
-    hit = row_result.get("rule_hit","")
-    return (row_result.get("rule_pass",0) >= 5          # account-code fallback
+    return (row_result.get("rule_pass", 0) >= 6          # account-code fallback
             or hit in _SERVICES_REVIEW_HITS
             or hit.startswith("acct:"))
 
@@ -831,20 +978,70 @@ def confidence_label(score):
     return "Low"
 
 def rule_pass_label(n):
-    return {0:"Vendor Hard Override", 1:"Commodity Code Crosswalk", 2:"Vendor Always-List",
-            3:"Category Metadata", 4:"Keyword / Regex", 5:"Account-Family Fallback"}.get(n, "Unknown")
+    return {0: "Vendor Hard Override", 1: "Commodity Code Crosswalk", 2: "Vendor Always-List",
+            3: "Category Metadata", 4: "Inference Rule", 5: "Keyword / Regex",
+            6: "Account-Family Fallback"}.get(n, "Unknown")
+
+
+def resolve_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Rename DataFrame columns to canonical names using COLUMN_ALIASES.
+    Returns a copy with standardized column names so the rule engine
+    can always look up 'Vendor Name', 'Commodity Code', etc."""
+    renames = {}
+    for canonical, aliases in COLUMN_ALIASES.items():
+        if canonical in df.columns:
+            continue  # already present
+        col_lower = {c.lower().strip(): c for c in df.columns}
+        for alias in aliases:
+            if alias in df.columns:
+                renames[alias] = canonical
+                break
+            match = col_lower.get(alias.lower().strip())
+            if match and match not in renames:
+                renames[match] = canonical
+                break
+    if renames:
+        log.info("Column renames applied: %s", renames)
+        df = df.rename(columns=renames)
+    return df
+
 
 def categorize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """Main entry point: categorize every row in the DataFrame.
+
+    1. Resolves column aliases so the engine finds the right fields
+    2. Runs the 7-pass rule stack on each row
+    3. Appends confidence labels, pass labels, and review flags
+    """
+    df = resolve_columns(df.copy())
+
+    total = len(df)
+    if total == 0:
+        log.warning("Empty DataFrame passed to categorize_dataframe")
+        return df
+
+    log.info("Categorizing %s rows...", f"{total:,}")
+
     # Run rule engine — one dict per row
     results = df.apply(lambda r: categorize_row(r.to_dict()), axis=1, result_type="expand")
 
-    # Build all derived columns in one shot — avoids PerformanceWarning from incremental inserts
+    # Build all derived columns in one shot — avoids PerformanceWarning
     extra = pd.DataFrame({
         "confidence_label":     results["confidence_score"].apply(confidence_label),
         "rule_pass_label":      results["rule_pass"].apply(rule_pass_label),
         "services_review_flag": results.apply(_needs_services_review, axis=1),
     }, index=results.index)
 
-    return pd.concat([df.reset_index(drop=True),
-                      results.reset_index(drop=True),
-                      extra.reset_index(drop=True)], axis=1)
+    out = pd.concat([df.reset_index(drop=True),
+                     results.reset_index(drop=True),
+                     extra.reset_index(drop=True)], axis=1)
+
+    # Log classification quality metrics
+    unc = (out["master_bucket"] == "Uncategorized").sum()
+    low_conf = (out["confidence_score"] < 0.4).sum()
+    review = out["services_review_flag"].sum()
+    log.info("Classification complete: %s uncategorized (%.1f%%), %s low-confidence, %s flagged for review",
+             f"{unc:,}", unc / total * 100 if total else 0,
+             f"{low_conf:,}", f"{review:,}")
+
+    return out
