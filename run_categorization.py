@@ -52,14 +52,14 @@ def _read_file_robust(path: str) -> pd.DataFrame:
     # CSV — try encodings in order
     for enc in ("utf-8-sig", "utf-8", "latin-1"):
         try:
-            return pd.read_csv(path, low_memory=False, encoding=enc,
+            return pd.read_csv(path, encoding=enc,
                                on_bad_lines="skip", engine="python")
         except UnicodeDecodeError:
             continue
         except Exception:
             break
     # Final fallback
-    return pd.read_csv(path, low_memory=False, encoding="latin-1",
+    return pd.read_csv(path, encoding="latin-1",
                        on_bad_lines="skip", engine="python")
 
 
