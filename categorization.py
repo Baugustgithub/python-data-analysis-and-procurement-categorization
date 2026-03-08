@@ -835,6 +835,16 @@ def rule_pass_label(n):
             3:"Category Metadata", 4:"Keyword / Regex", 5:"Account-Family Fallback"}.get(n, "Unknown")
 
 def categorize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    # Handle empty dataframe
+    if df.empty:
+        # Return empty dataframe with expected columns
+        empty_results = pd.DataFrame(columns=[
+            "master_bucket", "sub_bucket_l2", "sub_bucket_l3",
+            "rule_pass", "rule_hit", "confidence_score",
+            "confidence_label", "rule_pass_label", "services_review_flag"
+        ])
+        return pd.concat([df.reset_index(drop=True), empty_results], axis=1)
+
     # Run rule engine — one dict per row
     results = df.apply(lambda r: categorize_row(r.to_dict()), axis=1, result_type="expand")
 
