@@ -103,10 +103,11 @@ def _infer_on_contract(df: pd.DataFrame) -> pd.Series:
                      if any(k in c.lower() for k in ("contract no", "contract number",
                                                       "contract #", "contract"))]
     if contract_cols:
-        has_contract_num = df[contract_cols].fillna("").astype(str).apply(
-            lambda r: any(str(x).strip() and str(x).strip().lower() not in {"nan", "none", ""} for x in r),
-            axis=1
-        )
+        # Vectorized check: any contract column has a non-empty, non-NaN value
+        has_contract_num = pd.Series(False, index=df.index)
+        for col in contract_cols:
+            vals = df[col].fillna("").astype(str).str.strip().str.lower()
+            has_contract_num = has_contract_num | ~vals.isin({"", "nan", "none"})
     else:
         has_contract_num = pd.Series(False, index=df.index)
 
@@ -118,7 +119,7 @@ def _infer_on_contract(df: pd.DataFrame) -> pd.Series:
             break
 
     if method_col:
-        method_norm = df[method_col].astype(str).str.strip().str.lower()
+        method_norm = df[method_col].fillna("").astype(str).str.strip().str.lower()
         on_method = method_norm.isin(ON_CONTRACT_METHODS)
     else:
         on_method = pd.Series(False, index=df.index)
