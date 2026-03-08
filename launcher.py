@@ -248,6 +248,7 @@ class App(tk.Tk):
             # ── Read all files (incremental concat to limit peak memory) ──
             combined = None
             file_count = 0
+            canonical_cols = None
             for f in self.files:
                 self._log(f"Reading: {os.path.basename(f)}")
                 try:
@@ -255,7 +256,10 @@ class App(tk.Tk):
                     self._log(f"  → {len(df):,} rows", "ok")
                     if combined is None:
                         combined = df
+                        canonical_cols = list(df.columns)
                     else:
+                        # Keep only shared columns to prevent column explosion
+                        df = df.reindex(columns=canonical_cols)
                         combined = pd.concat([combined, df], ignore_index=True)
                     file_count += 1
                     del df

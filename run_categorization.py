@@ -441,13 +441,16 @@ def main():
 
     # ── Read file(s) (incremental concat to limit peak memory) ──────────────
     df = None
+    canonical_cols = None
     for f in input_files:
         log.info("Reading: %s", os.path.basename(f))
         try:
             chunk = _read_file_robust(f)
             if df is None:
                 df = chunk
+                canonical_cols = list(chunk.columns)
             else:
+                chunk = chunk.reindex(columns=canonical_cols)
                 df = pd.concat([df, chunk], ignore_index=True)
             del chunk
         except Exception as e:

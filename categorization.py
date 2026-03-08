@@ -1013,7 +1013,7 @@ def categorize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     2. Runs the 7-pass rule stack on each row
     3. Appends confidence labels, pass labels, and review flags
     """
-    df = resolve_columns(df.copy())
+    df = resolve_columns(df)
 
     total = len(df)
     if total == 0:
