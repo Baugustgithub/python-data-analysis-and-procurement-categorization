@@ -103,8 +103,8 @@ def _infer_on_contract(df: pd.DataFrame) -> pd.Series:
                      if any(k in c.lower() for k in ("contract no", "contract number",
                                                       "contract #", "contract"))]
     if contract_cols:
-        has_contract_num = df[contract_cols].astype(str).apply(
-            lambda r: any(x.strip() and x.strip().lower() not in {"nan", "none", ""} for x in r),
+        has_contract_num = df[contract_cols].fillna("").astype(str).apply(
+            lambda r: any(str(x).strip() and str(x).strip().lower() not in {"nan", "none", ""} for x in r),
             axis=1
         )
     else:
