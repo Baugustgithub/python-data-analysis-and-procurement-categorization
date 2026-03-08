@@ -36,7 +36,7 @@ class App(tk.Tk):
         self.title("Procurement Categorization")
         self.configure(bg=BG)
         self.resizable(True, True)
-        self.minsize(700, 540)
+        self.minsize(700, 460)
 
         self.files: list[str] = []
         self.running = False
@@ -84,8 +84,8 @@ class App(tk.Tk):
 
         self._placeholder()
 
-        # ── File buttons ─────────────────────────────────────────────────────
-        btn_row = tk.Frame(body, bg=BG, pady=8)
+        # ── File buttons + Run button ─────────────────────────────────────────
+        btn_row = tk.Frame(body, bg=BG, pady=6)
         btn_row.pack(fill="x")
 
         self._btn(btn_row, "＋  Add Files", self._add_files, ACCENT).pack(side="left")
@@ -93,6 +93,12 @@ class App(tk.Tk):
                   SURFACE, fg=ERROR).pack(side="left", padx=8)
         self._btn(btn_row, "Clear All", self._clear_all,
                   SURFACE, fg=MUTED).pack(side="left")
+
+        # Run button — always visible, right-aligned on the same row
+        self.run_btn = self._btn(btn_row, "▶  Run Categorization",
+                                 self._run, ACCENT2, fg="#000",
+                                 font=("Helvetica", 11, "bold"), padx=20, pady=6)
+        self.run_btn.pack(side="right")
 
         # ── Output folder ────────────────────────────────────────────────────
         out_row = tk.Frame(body, bg=BG, pady=4)
@@ -117,14 +123,14 @@ class App(tk.Tk):
 
         self.progress = ttk.Progressbar(body, mode="indeterminate", length=400,
                                         style="Custom.Horizontal.TProgressbar")
-        self.progress.pack(fill="x", pady=(8, 0))
+        self.progress.pack(fill="x", pady=(6, 0))
 
         # ── Log console ──────────────────────────────────────────────────────
         tk.Label(body, text="Log", font=("Helvetica", 9, "bold"),
-                 bg=BG, fg=MUTED).pack(anchor="w", pady=(10, 2))
+                 bg=BG, fg=MUTED).pack(anchor="w", pady=(6, 2))
 
         self.log = scrolledtext.ScrolledText(
-            body, height=10, bg="#0d0d1a", fg=TEXT,
+            body, height=7, bg="#0d0d1a", fg=TEXT,
             font=("Courier", 9), relief="flat", state="disabled",
             insertbackground=TEXT
         )
@@ -133,14 +139,6 @@ class App(tk.Tk):
         self.log.tag_config("warn", foreground=WARNING)
         self.log.tag_config("err",  foreground=ERROR)
         self.log.tag_config("hdr",  foreground=ACCENT2, font=("Courier", 9, "bold"))
-
-        # ── Run button ───────────────────────────────────────────────────────
-        footer = tk.Frame(self, bg=SURFACE, pady=12)
-        footer.pack(fill="x")
-        self.run_btn = self._btn(footer, "▶  Run Categorization",
-                                 self._run, ACCENT2, fg="#000",
-                                 font=("Helvetica", 12, "bold"), padx=28, pady=10)
-        self.run_btn.pack()
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -152,7 +150,7 @@ class App(tk.Tk):
 
     def _center(self):
         self.update_idletasks()
-        w, h = 720, 600
+        w, h = 720, 500
         x = (self.winfo_screenwidth()  - w) // 2
         y = (self.winfo_screenheight() - h) // 2
         self.geometry(f"{w}x{h}+{x}+{y}")
