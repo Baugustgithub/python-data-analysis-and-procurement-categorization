@@ -17,6 +17,8 @@ Usage:
 
 import os
 import sys
+import tempfile
+import shutil
 from datetime import datetime
 import pandas as pd
 
@@ -55,6 +57,7 @@ def _coerce_date(df: pd.DataFrame) -> pd.Series:
 def _infer_month_fy(dates: pd.Series):
     # VCU fiscal year assumed July 1 – June 30
     month = dates.dt.to_period("M").astype(str)
+    month = month.where(dates.notna(), other=pd.NA)
     fy = dates.dt.year
     fy = fy.where(dates.dt.month < 7, fy + 1)  # Jul–Dec -> next FY
     return month, fy
@@ -154,33 +157,46 @@ def main():
         top_vendors = pd.DataFrame(columns=["Vendor", "total_spend", "line_count", "pct_of_total"])
 
     if "services_review_flag" in df.columns:
-        srvq = df[df["services_review_flag"].fillna(False).astype(bool)].copy()
+        flag = df["services_review_flag"].fillna("false").astype(str).str.strip().str.lower()
+        srvq = df[flag.isin(("true", "1", "yes"))].copy()
     else:
         srvq = df.iloc[0:0].copy()
 
     unc = df[df["master_bucket"].fillna("") == "Uncategorized"].copy()
 
-    with pd.ExcelWriter(outp, engine="openpyxl") as writer:
-        summary = pd.DataFrame(
-            [
-                ["Rows", total_rows],
-                ["Total Spend", total_spend],
-                ["On-Contract Spend (inferred)", on_contract_spend],
-                ["On-Contract %", on_contract_pct],
-                ["FY-End Months Used", ", ".join(map(str, last3))],
-                ["FY-End Spend", fy_end_spend],
-                ["FY-End %", fy_end_pct],
-                ["Generated", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
-            ],
-            columns=["Metric", "Value"],
-        )
-        summary.to_excel(writer, sheet_name="Summary", index=False)
-        by_bucket.to_excel(writer, sheet_name="Spend by Bucket", index=False)
-        top_vendors.to_excel(writer, sheet_name="Top Vendors", index=False)
-        srvq.to_excel(writer, sheet_name="Services Review", index=False)
-        unc.to_excel(writer, sheet_name="Uncategorized", index=False)
+    summary = pd.DataFrame(
+        [
+            ["Rows", total_rows],
+            ["Total Spend", total_spend],
+            ["On-Contract Spend (inferred)", on_contract_spend],
+            ["On-Contract %", on_contract_pct],
+            ["FY-End Months Used", ", ".join(map(str, last3))],
+            ["FY-End Spend", fy_end_spend],
+            ["FY-End %", fy_end_pct],
+            ["Generated", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
+        ],
+        columns=["Metric", "Value"],
+    )
 
-    print(f"Written: {outp}")
+    # Write to a temp file first, then atomically move into place.
+    # This prevents a corrupt partial .xlsx if the write fails mid-stream.
+    out_dir = os.path.dirname(os.path.abspath(outp))
+    fd, tmp_path = tempfile.mkstemp(suffix=".xlsx", dir=out_dir)
+    os.close(fd)
+    try:
+        with pd.ExcelWriter(tmp_path, engine="openpyxl") as writer:
+            summary.to_excel(writer, sheet_name="Summary", index=False)
+            by_bucket.to_excel(writer, sheet_name="Spend by Bucket", index=False)
+            top_vendors.to_excel(writer, sheet_name="Top Vendors", index=False)
+            srvq.to_excel(writer, sheet_name="Services Review", index=False)
+            unc.to_excel(writer, sheet_name="Uncategorized", index=False)
+        shutil.move(tmp_path, outp)
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
+
+    print(f"Written: {outp}  ({len(srvq):,} services-review rows, {len(unc):,} uncategorized rows)")
 
 
 if __name__ == "__main__":
