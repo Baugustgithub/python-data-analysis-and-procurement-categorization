@@ -22,6 +22,8 @@ if len(sys.argv) > 1:
     input_files = [sys.argv[1]]
     if not os.path.exists(input_files[0]):
         print(f"ERROR: File not found: {input_files[0]}")
+        if sys.stdin.isatty():
+            input("\nPress Enter to exit...")
         sys.exit(1)
 else:
     input_files = glob.glob(os.path.join(script_dir, "template_po_search*.csv"))
@@ -29,6 +31,8 @@ else:
         print("ERROR: No source CSV found.")
         print("  Either pass a file path as an argument, or place a")
         print("  template_po_search*.csv file in this folder.")
+        if sys.stdin.isatty():
+            input("\nPress Enter to exit...")
         sys.exit(1)
 
 output_file = sys.argv[2] if len(sys.argv) > 2 else os.path.join(script_dir, "categorized_output.csv")
@@ -49,6 +53,8 @@ for f in input_files:
                 dfs.append(pd.read_csv(f, low_memory=False, encoding="latin-1"))
     except Exception as e:
         print(f"ERROR reading {os.path.basename(f)}: {e}")
+        if sys.stdin.isatty():
+            input("\nPress Enter to exit...")
         sys.exit(1)
 
 df = pd.concat(dfs, ignore_index=True)
@@ -106,3 +112,7 @@ if "services_review_flag" in out.columns:
     print(f"\n-- Services Review Queue --")
     print(f"  {review_count:,} rows need sub-classification  "
           + (f"  ${review_spend:,.0f} spend" if review_spend else ""))
+
+# ── Pause if run via double-click (keep window open) ───────────────────────────
+if sys.stdin.isatty():
+    input("\nPress Enter to exit...")
