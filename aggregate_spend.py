@@ -70,4 +70,12 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"\nERROR: {e}")
+        if sys.stdin.isatty():
+            input("\nPress Enter to exit...")
+        sys.exit(1)
+    if sys.stdin.isatty():
+        input("\nPress Enter to exit...")
