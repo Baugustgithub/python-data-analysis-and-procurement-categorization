@@ -28,14 +28,14 @@ def _safe_num_series(s: pd.Series) -> pd.Series:
 def _read_csv_robust(path: str) -> pd.DataFrame:
     for enc in ("utf-8", "utf-8-sig", "latin-1"):
         try:
-            return pd.read_csv(path, low_memory=False, encoding=enc,
+            return pd.read_csv(path, encoding=enc,
                                on_bad_lines="skip", engine="python")
         except UnicodeDecodeError:
             continue
         except Exception:
             break
     # Final fallback — python engine with latin-1 is most tolerant
-    return pd.read_csv(path, low_memory=False, encoding="latin-1",
+    return pd.read_csv(path, encoding="latin-1",
                        on_bad_lines="skip", engine="python")
 
 
